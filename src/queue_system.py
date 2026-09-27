@@ -66,12 +66,25 @@ class TaskQueue:
         self.config = self.load_config(config_path)
         
         # Redis connection
-        self.redis_client = redis.Redis(
-            host=self.config['queue']['redis_host'],
-            port=self.config['queue']['redis_port'],
-            db=self.config['queue']['redis_db'],
-            decode_responses=True
-        )
+        try:
+            self.redis_client = redis.Redis(
+                host=self.config['queue']['redis_host'],
+                port=self.config['queue']['redis_port'],
+                db=self.config['queue']['redis_db'],
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_keepalive=True,
+                health_check_interval=30
+            )
+            # Test connection
+            self.redis_client.ping()
+            self.redis_available = True
+        except Exception as e:
+            print(f"Warning: Redis connection failed: {e}")
+            print("Running in fallback mode (in-memory queue)")
+            self.redis_available = False
+            self._fallback_queue = []
+            self._fallback_workers = {}
         
         # Queue names
         self.task_queue = 'prostruct:tasks'
@@ -134,6 +147,11 @@ class TaskQueue:
         If priority=True, add to priority queue.
         """
         with self.lock:
+            if not self.redis_available:
+                # Fallback: use in-memory list
+                self._fallback_queue.append((task.sequence_length, task))
+                return True
+            
             queue_name = self.priority_queue if priority else self.task_queue
             task_data = json.dumps(task.to_dict())
             
@@ -160,6 +178,15 @@ class TaskQueue:
         Implements length-aware scheduling: prefers shorter sequences.
         """
         with self.lock:
+            if not self.redis_available:
+                # Fallback: pop from in-memory list (sorted by sequence length)
+                if not self._fallback_queue:
+                    return None
+                self._fallback_queue.sort(key=lambda x: x[0])  # Sort by sequence length
+                _, task = self._fallback_queue.pop(0)
+                self._update_worker_status(worker_id, current_task_id=task.task_id, is_busy=True)
+                return task
+            
             try:
                 # Check priority queue first
                 task_data = self.redis_client.zpopmin(self.priority_queue)
@@ -217,13 +244,17 @@ class TaskQueue:
                 
                 self._update_worker_status(worker_id, current_task_id=None, is_busy=False)
                 
-                # Publish result to Redis for dashboard
-                self.redis_client.publish(self.results_queue, json.dumps({
-                    'task_id': task.task_id,
-                    'worker_id': worker_id,
-                    'success': success,
-                    'result': result
-                }))
+                # Publish result to Redis for dashboard (if available)
+                if self.redis_available:
+                    try:
+                        self.redis_client.publish(self.results_queue, json.dumps({
+                            'task_id': task.task_id,
+                            'worker_id': worker_id,
+                            'success': success,
+                            'result': result
+                        }))
+                    except:
+                        pass
                 
             except Exception as e:
                 print(f"Error completing task {task.task_id}: {e}")
@@ -240,7 +271,11 @@ class TaskQueue:
             print(f"Task {task.task_id} re-enqueued (retry {task.retries}/{task.max_retries})")
         else:
             # Move to dead-letter queue
-            self.redis_client.zadd(self.dead_letter_queue, {json.dumps(task.to_dict()): task.sequence_length})
+            if self.redis_available:
+                try:
+                    self.redis_client.zadd(self.dead_letter_queue, {json.dumps(task.to_dict()): task.sequence_length})
+                except:
+                    pass
             print(f"Task {task.task_id} moved to dead-letter queue after {task.retries} failures")
         
         # Update worker status
@@ -255,7 +290,10 @@ class TaskQueue:
                     worker_id=worker_id,
                     last_heartbeat=datetime.utcnow().isoformat()
                 )
-                self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+                if self.redis_available:
+                    self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+                else:
+                    self._fallback_workers[worker_id] = status
                 return True
             except Exception as e:
                 print(f"Error registering worker {worker_id}: {e}")
@@ -265,52 +303,104 @@ class TaskQueue:
         """Update worker heartbeat."""
         with self.lock:
             try:
-                status_data = self.redis_client.hget(self.worker_registry, worker_id)
-                if status_data:
-                    status = WorkerStatus.from_dict(json.loads(status_data))
-                    status.last_heartbeat = datetime.utcnow().isoformat()
-                    self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+                if self.redis_available:
+                    status_data = self.redis_client.hget(self.worker_registry, worker_id)
+                    if status_data:
+                        status = WorkerStatus.from_dict(json.loads(status_data))
+                        status.last_heartbeat = datetime.utcnow().isoformat()
+                        self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+                else:
+                    if worker_id in self._fallback_workers:
+                        self._fallback_workers[worker_id].last_heartbeat = datetime.utcnow().isoformat()
             except Exception as e:
                 print(f"Error updating heartbeat for worker {worker_id}: {e}")
     
     def _update_worker_status(self, worker_id: str, current_task_id: Optional[str] = None, is_busy: bool = False):
         """Update worker status."""
         try:
-            status_data = self.redis_client.hget(self.worker_registry, worker_id)
-            if status_data:
-                status = WorkerStatus.from_dict(json.loads(status_data))
-                status.current_task_id = current_task_id
-                status.is_busy = is_busy
-                status.last_heartbeat = datetime.utcnow().isoformat()
-                self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+            if self.redis_available:
+                status_data = self.redis_client.hget(self.worker_registry, worker_id)
+                if status_data:
+                    status = WorkerStatus.from_dict(json.loads(status_data))
+                    status.current_task_id = current_task_id
+                    status.is_busy = is_busy
+                    status.last_heartbeat = datetime.utcnow().isoformat()
+                    self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+            else:
+                if worker_id in self._fallback_workers:
+                    self._fallback_workers[worker_id].current_task_id = current_task_id
+                    self._fallback_workers[worker_id].is_busy = is_busy
+                    self._fallback_workers[worker_id].last_heartbeat = datetime.utcnow().isoformat()
         except Exception as e:
             print(f"Error updating worker status: {e}")
     
     def _increment_worker_completed(self, worker_id: str):
         """Increment worker's completed task count."""
         try:
-            status_data = self.redis_client.hget(self.worker_registry, worker_id)
-            if status_data:
-                status = WorkerStatus.from_dict(json.loads(status_data))
-                status.tasks_completed += 1
-                self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+            if self.redis_available:
+                status_data = self.redis_client.hget(self.worker_registry, worker_id)
+                if status_data:
+                    status = WorkerStatus.from_dict(json.loads(status_data))
+                    status.tasks_completed += 1
+                    self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+            else:
+                if worker_id in self._fallback_workers:
+                    self._fallback_workers[worker_id].tasks_completed += 1
         except Exception as e:
             print(f"Error incrementing completed count: {e}")
     
     def _increment_worker_failed(self, worker_id: str):
         """Increment worker's failed task count."""
         try:
-            status_data = self.redis_client.hget(self.worker_registry, worker_id)
-            if status_data:
-                status = WorkerStatus.from_dict(json.loads(status_data))
-                status.tasks_failed += 1
-                self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+            if self.redis_available:
+                status_data = self.redis_client.hget(self.worker_registry, worker_id)
+                if status_data:
+                    status = WorkerStatus.from_dict(json.loads(status_data))
+                    status.tasks_failed += 1
+                    self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
+            else:
+                if worker_id in self._fallback_workers:
+                    self._fallback_workers[worker_id].tasks_failed += 1
         except Exception as e:
             print(f"Error incrementing failed count: {e}")
     
     def get_queue_stats(self) -> Dict[str, Any]:
         """Get current queue statistics."""
         try:
+            if not self.redis_available:
+                # Fallback: use in-memory data
+                workers = []
+                active_workers = 0
+                for worker_id, status in self._fallback_workers.items():
+                    workers.append(status.to_dict())
+                    if status.is_busy:
+                        active_workers += 1
+                
+                # Get results from SQLite
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                cursor.execute("SELECT COUNT(*) FROM results WHERE status = 'completed'")
+                completed_count = cursor.fetchone()[0]
+                
+                cursor.execute("SELECT COUNT(*) FROM results WHERE status = 'failed'")
+                failed_count = cursor.fetchone()[0]
+                
+                conn.close()
+                
+                return {
+                    'priority_queue_depth': 0,
+                    'regular_queue_depth': len(self._fallback_queue),
+                    'total_queue_depth': len(self._fallback_queue),
+                    'dead_letter_queue_depth': 0,
+                    'total_workers': len(workers),
+                    'active_workers': active_workers,
+                    'workers': workers,
+                    'total_completed': completed_count,
+                    'total_failed': failed_count,
+                    'timestamp': datetime.utcnow().isoformat()
+                }
+            
             priority_count = self.redis_client.zcard(self.priority_queue)
             regular_count = self.redis_client.zcard(self.task_queue)
             dlq_count = self.redis_client.zcard(self.dead_letter_queue)
@@ -363,24 +453,32 @@ class TaskQueue:
         
         with self.lock:
             try:
-                workers_data = self.redis_client.hgetall(self.worker_registry)
-                current_time = datetime.utcnow()
-                
-                for worker_id, status_data in workers_data.items():
-                    status = WorkerStatus.from_dict(json.loads(status_data))
-                    last_heartbeat = datetime.fromisoformat(status.last_heartbeat)
+                if self.redis_available:
+                    workers_data = self.redis_client.hgetall(self.worker_registry)
+                    current_time = datetime.utcnow()
                     
-                    if (current_time - last_heartbeat).total_seconds() > heartbeat_timeout:
-                        print(f"Worker {worker_id} timed out, cleaning up")
+                    for worker_id, status_data in workers_data.items():
+                        status = WorkerStatus.from_dict(json.loads(status_data))
+                        last_heartbeat = datetime.fromisoformat(status.last_heartbeat)
                         
-                        # Return current task to queue if any
-                        if status.current_task_id:
-                            # Note: In a real implementation, we'd need to track task data
-                            # For now, just log it
-                            print(f"Task {status.current_task_id} may need to be re-enqueued")
-                        
-                        # Remove worker
-                        self.redis_client.hdel(self.worker_registry, worker_id)
+                        if (current_time - last_heartbeat).total_seconds() > heartbeat_timeout:
+                            print(f"Worker {worker_id} timed out, cleaning up")
+                            
+                            # Return current task to queue if any
+                            if status.current_task_id:
+                                # Note: In a real implementation, we'd need to track task data
+                                # For now, just log it
+                                print(f"Task {status.current_task_id} may need to be re-enqueued")
+                            
+                            # Remove worker
+                            self.redis_client.hdel(self.worker_registry, worker_id)
+                else:
+                    current_time = datetime.utcnow()
+                    for worker_id, status in list(self._fallback_workers.items()):
+                        last_heartbeat = datetime.fromisoformat(status.last_heartbeat)
+                        if (current_time - last_heartbeat).total_seconds() > heartbeat_timeout:
+                            print(f"Worker {worker_id} timed out, cleaning up")
+                            del self._fallback_workers[worker_id]
                 
             except Exception as e:
                 print(f"Error cleaning up failed workers: {e}")
@@ -414,10 +512,16 @@ class TaskQueue:
     
     def clear_queues(self):
         """Clear all queues (useful for testing)."""
-        self.redis_client.delete(self.task_queue)
-        self.redis_client.delete(self.priority_queue)
-        self.redis_client.delete(self.dead_letter_queue)
-        self.redis_client.delete(self.worker_registry)
+        if self.redis_available:
+            try:
+                self.redis_client.delete(self.task_queue)
+                self.redis_client.delete(self.priority_queue)
+                self.redis_client.delete(self.dead_letter_queue)
+                self.redis_client.delete(self.worker_registry)
+            except:
+                pass
+        self._fallback_queue = []
+        self._fallback_workers = {}
         print("All queues cleared")
 
 
