@@ -248,8 +248,7 @@ def main():
     print("5. Start workers")
     print("6. Start dashboard")
     print("7. Monitor progress")
-    print("\nPress Enter to continue or Ctrl+C to cancel...")
-    input()
+    print("\nStarting automatically...")
     
     try:
         # Step 1: Generate data

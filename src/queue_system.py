@@ -2,16 +2,17 @@
 Distributed Task Queue System for ProStruct
 Redis-backed queue with length-aware load balancing, retries, and dead-letter queue.
 """
-
+import redis
 import json
 import time
 import threading
-import sqlite3
+import yaml
+from pathlib import Path
 from typing import Dict, List, Optional, Any
+import multiprocessing
 from dataclasses import dataclass, asdict
 from datetime import datetime
-import redis
-import yaml
+import sqlite3
 
 
 @dataclass
@@ -81,10 +82,13 @@ class TaskQueue:
             self.redis_available = True
         except Exception as e:
             print(f"Warning: Redis connection failed: {e}")
-            print("Running in fallback mode (in-memory queue)")
+            print("Running in fallback mode (shared memory queue)")
             self.redis_available = False
-            self._fallback_queue = []
-            self._fallback_workers = {}
+            # Use multiprocessing.Manager for shared queue across processes
+            self._manager = multiprocessing.Manager()
+            self._fallback_queue = self._manager.list()
+            self._fallback_workers = self._manager.dict()
+            self._fallback_lock = self._manager.Lock()
         
         # Queue names
         self.task_queue = 'prostruct:tasks'
@@ -148,8 +152,9 @@ class TaskQueue:
         """
         with self.lock:
             if not self.redis_available:
-                # Fallback: use in-memory list
-                self._fallback_queue.append((task.sequence_length, task))
+                # Fallback: use shared memory list with lock
+                with self._fallback_lock:
+                    self._fallback_queue.append((task.sequence_length, task))
                 return True
             
             queue_name = self.priority_queue if priority else self.task_queue
@@ -179,11 +184,16 @@ class TaskQueue:
         """
         with self.lock:
             if not self.redis_available:
-                # Fallback: pop from in-memory list (sorted by sequence length)
-                if not self._fallback_queue:
-                    return None
-                self._fallback_queue.sort(key=lambda x: x[0])  # Sort by sequence length
-                _, task = self._fallback_queue.pop(0)
+                # Fallback: pop from shared memory list (sorted by sequence length)
+                with self._fallback_lock:
+                    if not self._fallback_queue:
+                        return None
+                    # Convert to list for sorting
+                    queue_list = list(self._fallback_queue)
+                    queue_list.sort(key=lambda x: x[0])  # Sort by sequence length
+                    _, task = queue_list.pop(0)
+                    # Clear and repopulate
+                    self._fallback_queue[:] = queue_list
                 self._update_worker_status(worker_id, current_task_id=task.task_id, is_busy=True)
                 return task
             
@@ -293,7 +303,8 @@ class TaskQueue:
                 if self.redis_available:
                     self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
                 else:
-                    self._fallback_workers[worker_id] = status
+                    with self._fallback_lock:
+                        self._fallback_workers[worker_id] = status
                 return True
             except Exception as e:
                 print(f"Error registering worker {worker_id}: {e}")
@@ -310,8 +321,9 @@ class TaskQueue:
                         status.last_heartbeat = datetime.utcnow().isoformat()
                         self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
                 else:
-                    if worker_id in self._fallback_workers:
-                        self._fallback_workers[worker_id].last_heartbeat = datetime.utcnow().isoformat()
+                    with self._fallback_lock:
+                        if worker_id in self._fallback_workers:
+                            self._fallback_workers[worker_id].last_heartbeat = datetime.utcnow().isoformat()
             except Exception as e:
                 print(f"Error updating heartbeat for worker {worker_id}: {e}")
     
@@ -332,7 +344,7 @@ class TaskQueue:
                     self._fallback_workers[worker_id].is_busy = is_busy
                     self._fallback_workers[worker_id].last_heartbeat = datetime.utcnow().isoformat()
         except Exception as e:
-            print(f"Error updating worker status: {e}")
+            print(f"Error updating worker status for {worker_id}: {e}")
     
     def _increment_worker_completed(self, worker_id: str):
         """Increment worker's completed task count."""
@@ -344,8 +356,9 @@ class TaskQueue:
                     status.tasks_completed += 1
                     self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
             else:
-                if worker_id in self._fallback_workers:
-                    self._fallback_workers[worker_id].tasks_completed += 1
+                with self._fallback_lock:
+                    if worker_id in self._fallback_workers:
+                        self._fallback_workers[worker_id].tasks_completed += 1
         except Exception as e:
             print(f"Error incrementing completed count: {e}")
     
@@ -359,8 +372,9 @@ class TaskQueue:
                     status.tasks_failed += 1
                     self.redis_client.hset(self.worker_registry, worker_id, json.dumps(status.to_dict()))
             else:
-                if worker_id in self._fallback_workers:
-                    self._fallback_workers[worker_id].tasks_failed += 1
+                with self._fallback_lock:
+                    if worker_id in self._fallback_workers:
+                        self._fallback_workers[worker_id].tasks_failed += 1
         except Exception as e:
             print(f"Error incrementing failed count: {e}")
     
@@ -368,13 +382,14 @@ class TaskQueue:
         """Get current queue statistics."""
         try:
             if not self.redis_available:
-                # Fallback: use in-memory data
-                workers = []
-                active_workers = 0
-                for worker_id, status in self._fallback_workers.items():
-                    workers.append(status.to_dict())
-                    if status.is_busy:
-                        active_workers += 1
+                # Fallback: use shared memory data
+                with self._fallback_lock:
+                    workers = []
+                    active_workers = 0
+                    for worker_id, status in self._fallback_workers.items():
+                        workers.append(status.to_dict())
+                        if status.is_busy:
+                            active_workers += 1
                 
                 # Get results from SQLite
                 conn = sqlite3.connect(self.db_path)
@@ -473,12 +488,13 @@ class TaskQueue:
                             # Remove worker
                             self.redis_client.hdel(self.worker_registry, worker_id)
                 else:
-                    current_time = datetime.utcnow()
-                    for worker_id, status in list(self._fallback_workers.items()):
-                        last_heartbeat = datetime.fromisoformat(status.last_heartbeat)
-                        if (current_time - last_heartbeat).total_seconds() > heartbeat_timeout:
-                            print(f"Worker {worker_id} timed out, cleaning up")
-                            del self._fallback_workers[worker_id]
+                    with self._fallback_lock:
+                        current_time = datetime.utcnow()
+                        for worker_id, status in list(self._fallback_workers.items()):
+                            last_heartbeat = datetime.fromisoformat(status.last_heartbeat)
+                            if (current_time - last_heartbeat).total_seconds() > heartbeat_timeout:
+                                print(f"Worker {worker_id} timed out, cleaning up")
+                                del self._fallback_workers[worker_id]
                 
             except Exception as e:
                 print(f"Error cleaning up failed workers: {e}")
@@ -520,8 +536,9 @@ class TaskQueue:
                 self.redis_client.delete(self.worker_registry)
             except:
                 pass
-        self._fallback_queue = []
-        self._fallback_workers = {}
+        with self._fallback_lock:
+            self._fallback_queue[:] = []
+            self._fallback_workers.clear()
         print("All queues cleared")
 
 
