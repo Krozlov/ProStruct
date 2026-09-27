@@ -248,8 +248,10 @@ class ProStructModel:
                 
                 item_labels = [0] * seq_len
                 for pos, ann_type in annotations.items():
-                    if pos <= seq_len and ann_type in ['BINDING', 'ACT_SITE', 'ACTIVE']:
-                        item_labels[pos - 1] = 1  # 0-indexed
+                    # Convert position to int if it's a string
+                    pos_int = int(pos) if isinstance(pos, str) else pos
+                    if pos_int <= seq_len and ann_type in ['BINDING', 'ACT_SITE', 'ACTIVE']:
+                        item_labels[pos_int - 1] = 1  # 0-indexed
                 
                 # Pad
                 item_labels += [0] * (max_len - len(item_labels))

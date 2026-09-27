@@ -73,10 +73,10 @@ class TaskQueue:
                 db=self.config['queue']['redis_db'],
                 decode_responses=True,
                 socket_connect_timeout=5,
-                socket_keepalive=True,
-                health_check_interval=30
+                socket_keepalive=True
+                # Remove health_check_interval to avoid HELLO command
             )
-            # Test connection
+            # Test connection with simple PING
             self.redis_client.ping()
             self.redis_available = True
         except Exception as e:
