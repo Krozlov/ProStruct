@@ -239,21 +239,21 @@ class ProStructModel:
         
         elif task == 'classification':
             # Create binding site labels
-            binding Labels = []
+            binding_labels_list = []
             for item in batch:
                 annotations = item.get('annotations', {})
                 seq_len = len(item['sequence'])
                 if seq_len > max_len:
                     seq_len = max_len
                 
-                binding_labels = [0] * seq_len
+                item_labels = [0] * seq_len
                 for pos, ann_type in annotations.items():
                     if pos <= seq_len and ann_type in ['BINDING', 'ACT_SITE', 'ACTIVE']:
-                        binding_labels[pos - 1] = 1  # 0-indexed
+                        item_labels[pos - 1] = 1  # 0-indexed
                 
                 # Pad
-                binding_labels += [0] * (max_len - len(binding_labels))
-                binding_labels_list.append(binding_labels)
+                item_labels += [0] * (max_len - len(item_labels))
+                binding_labels_list.append(item_labels)
             
             binding_labels = torch.tensor(binding_labels_list, dtype=torch.long).to(self.device)
             
