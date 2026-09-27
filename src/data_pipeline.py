@@ -11,6 +11,7 @@ from typing import List, Dict, Tuple
 from Bio import SeqIO
 from Bio.SeqFeature import SeqFeature
 import yaml
+import numpy as np
 
 
 # Amino acid vocabulary
@@ -169,6 +170,7 @@ def generate_synthetic_dataset(
     Synthetic mutants are clearly tagged and used only for load testing.
     """
     random.seed(random_seed)
+    np.random.seed(random_seed)
     synthetic_proteins = []
     mutant_counter = 0
     
@@ -208,6 +210,7 @@ def split_dataset(
     Real proteins and their synthetic derivatives stay in the same split.
     """
     random.seed(random_seed)
+    np.random.seed(random_seed)
     
     # Group proteins by parent_id (real proteins have parent_id=None)
     protein_groups = {}

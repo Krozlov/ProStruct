@@ -59,61 +59,38 @@ def step_2_train_model():
     print(f"Training samples: {len(train_data)}")
     print(f"Validation samples: {len(val_data)}")
     
-    # Quick pretraining (1 epoch for demo)
-    print("\nStarting MLM pretraining (1 epoch for demo)...")
+    # Create simple dataloaders
     batch_size = config['training']['batch_size']
     
-    # Simple batching
-    for epoch in range(1):
-        for i in range(0, len(train_data), batch_size):
-            batch = train_data[i:i+batch_size]
-            try:
-                batch_dict = model.collate_batch(batch, task='mlm')
-                model.optimizer.zero_grad()
-                logits = model.model.forward_mlm(batch_dict['input_ids'], batch_dict['attention_mask'])
-                import torch.nn.functional as F
-                loss = F.cross_entropy(
-                    logits.view(-1, config['model']['vocab_size']),
-                    batch_dict['labels'].view(-1),
-                    ignore_index=-100
-                )
-                loss.backward()
-                model.optimizer.step()
-                
-                if i % (batch_size * 5) == 0:
-                    print(f"  Pretraining batch {i//batch_size}, Loss: {loss.item():.4f}")
-            except Exception as e:
-                print(f"  Warning: Batch {i} failed: {e}")
+    def create_dataloader(data):
+        for i in range(0, len(data), batch_size):
+            yield data[i:i+batch_size]
     
+    train_loader = list(create_dataloader(train_data))
+    val_loader = list(create_dataloader(val_data))
+    
+    # MLM pretraining with validation
+    print(f"\nStarting MLM pretraining ({config['training']['epochs_pretrain']} epochs)...")
+    model.train_with_validation(
+        train_loader, val_loader, 
+        task='mlm',
+        num_epochs=config['training']['epochs_pretrain'],
+        checkpoint_path='data/pretrain_best.pt'
+    )
     print("✓ Pretraining completed")
     
-    # Quick fine-tuning (1 epoch for demo)
-    print("\nStarting binding site fine-tuning (1 epoch for demo)...")
-    for epoch in range(1):
-        for i in range(0, len(train_data), batch_size):
-            batch = train_data[i:i+batch_size]
-            try:
-                batch_dict = model.collate_batch(batch, task='classification')
-                model.optimizer.zero_grad()
-                logits = model.model.forward_classification(batch_dict['input_ids'], batch_dict['attention_mask'])
-                import torch.nn.functional as F
-                loss = F.cross_entropy(
-                    logits.view(-1, 2),
-                    batch_dict['labels'].view(-1),
-                    ignore_index=-100
-                )
-                loss.backward()
-                model.optimizer.step()
-                
-                if i % (batch_size * 5) == 0:
-                    print(f"  Fine-tuning batch {i//batch_size}, Loss: {loss.item():.4f}")
-            except Exception as e:
-                print(f"  Warning: Batch {i} failed: {e}")
-    
+    # Fine-tuning with validation
+    print(f"\nStarting binding site fine-tuning ({config['training']['epochs_finetune']} epochs)...")
+    model.train_with_validation(
+        train_loader, val_loader,
+        task='classification',
+        num_epochs=config['training']['epochs_finetune'],
+        checkpoint_path='data/finetune_best.pt'
+    )
     print("✓ Fine-tuning completed")
     
-    # Save model
-    print("\nSaving model checkpoint...")
+    # Save final model
+    print("\nSaving final model checkpoint...")
     model.save_model('data/model_checkpoint.pt')
     print("✓ Model saved")
 

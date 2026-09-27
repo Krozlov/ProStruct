@@ -9,7 +9,11 @@ import torch.nn.functional as F
 import yaml
 from pathlib import Path
 import json
+import random
+import numpy as np
 from typing import Dict, List, Tuple
+from datetime import datetime
+import hashlib
 
 
 # Amino acid vocabulary
@@ -130,16 +134,42 @@ class ProStructModel:
         self.config = self.load_config(config_path)
         self.device = torch.device(device)
         
+        # Set random seeds for reproducibility
+        seed = self.config['data']['random_seed']
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        
         self.model = ProteinTransformer(self.config['model']).to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config['training']['learning_rate'])
         
         self.pad_token_id = AA_VOCAB['<PAD>']
         self.mask_token_id = AA_VOCAB['<MASK>']
+        
+        # Training metadata
+        self.training_metadata = {
+            'config': self.config,
+            'start_time': datetime.utcnow().isoformat(),
+            'random_seed': seed,
+            'device': str(self.device),
+            'model_params': sum(p.numel() for p in self.model.parameters())
+        }
     
     def load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""
         with open(config_path, 'r') as f:
             return yaml.safe_load(f)
+    
+    def save_metadata(self, checkpoint_path: str):
+        """Save training metadata alongside checkpoint."""
+        self.training_metadata['end_time'] = datetime.utcnow().isoformat()
+        metadata_path = checkpoint_path.replace('.pt', '_metadata.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(self.training_metadata, f, indent=2)
+        print(f"Metadata saved to {metadata_path}")
     
     def encode_sequence(self, sequence: str) -> List[int]:
         """Convert amino acid sequence to token IDs."""
@@ -292,12 +322,41 @@ class ProStructModel:
             
             total_loss += loss.item()
             
-            if batch_idx % 10 == 0:
-                print(f"Pretrain Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}")
+            if batch_idx % 100 == 0:
+                print(f"  Pretraining batch {batch_idx}, Loss: {loss.item():.4f}")
         
         avg_loss = total_loss / len(dataloader)
         print(f"Pretrain Epoch {epoch}, Average Loss: {avg_loss:.4f}")
         return avg_loss
+    
+    def validate_epoch(self, dataloader, task: str = 'mlm') -> Dict[str, float]:
+        """Validate one epoch."""
+        self.model.eval()
+        total_loss = 0.0
+        
+        with torch.no_grad():
+            for batch in dataloader:
+                batch_dict = self.collate_batch(batch, task=task)
+                
+                if task == 'mlm':
+                    logits = self.model.forward_mlm(batch_dict['input_ids'], batch_dict['attention_mask'])
+                    loss = F.cross_entropy(
+                        logits.view(-1, self.config['model']['vocab_size']),
+                        batch_dict['labels'].view(-1),
+                        ignore_index=-100
+                    )
+                else:  # classification
+                    logits = self.model.forward_classification(batch_dict['input_ids'], batch_dict['attention_mask'])
+                    loss = F.cross_entropy(
+                        logits.view(-1, 2),
+                        batch_dict['labels'].view(-1),
+                        ignore_index=-100
+                    )
+                
+                total_loss += loss.item()
+        
+        avg_loss = total_loss / len(dataloader)
+        return {'loss': avg_loss}
     
     def finetune_epoch(self, dataloader, epoch: int) -> Dict[str, float]:
         """Train one epoch of binding site classification."""
@@ -418,7 +477,48 @@ class ProStructModel:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'config': self.config
         }, path)
+        self.save_metadata(path)
         print(f"Model saved to {path}")
+    
+    def train_with_validation(self, train_dataloader, val_dataloader, task: str = 'mlm', 
+                              num_epochs: int = 10, checkpoint_path: str = 'data/best_model.pt'):
+        """Train with validation and save best checkpoint."""
+        best_val_loss = float('inf')
+        train_losses = []
+        val_losses = []
+        
+        for epoch in range(num_epochs):
+            if task == 'mlm':
+                train_loss = self.pretrain_epoch(train_dataloader, epoch)
+            else:
+                train_metrics = self.finetune_epoch(train_dataloader, epoch)
+                train_loss = train_metrics['loss']
+            
+            # Validation
+            val_metrics = self.validate_epoch(val_dataloader, task)
+            val_loss = val_metrics['loss']
+            
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
+            
+            print(f"Epoch {epoch}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
+            
+            # Save best checkpoint
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                self.save_model(checkpoint_path)
+                print(f"  ✓ New best model saved (val_loss: {val_loss:.4f})")
+        
+        # Update metadata with training history
+        self.training_metadata['training_history'] = {
+            'task': task,
+            'num_epochs': num_epochs,
+            'train_losses': train_losses,
+            'val_losses': val_losses,
+            'best_val_loss': best_val_loss
+        }
+        
+        return {'train_losses': train_losses, 'val_losses': val_losses, 'best_val_loss': best_val_loss}
     
     def load_model(self, path: str):
         """Load model checkpoint."""

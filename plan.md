@@ -96,7 +96,7 @@ API pulls and downloading pretrained ESM2 weights.
 Python, PyTorch (CPU), Redis, FastAPI, SQLite, vanilla JS/Chart.js frontend.
 
 ## Implementation Status
-All components have been implemented as per the plan:
+### Core Implementation ✅ COMPLETED
 - ✅ Data pipeline (`src/data_pipeline.py`)
 - ✅ Model (`src/model.py`)
 - ✅ Task queue system (`src/queue_system.py`)
@@ -105,3 +105,59 @@ All components have been implemented as per the plan:
 - ✅ End-to-end demo script (`demo.py`)
 - ✅ Configuration (`config.yaml`)
 - ✅ Dependencies (`requirements.txt`)
+
+### Course Deliverables - TODO
+#### 1. Research Methodology (COMP6705001)
+- ❌ Literature review on protein structure prediction & distributed ML
+- ❌ 25-page LaTeX research paper (IEEE two-column format)
+- ❌ Statistical analysis with baseline comparisons
+
+#### 2. Computational Biology (COMP6705001)
+- ❌ Proposal slides (Session 7)
+- ❌ Milestone slides (Session 10)
+- ❌ Final presentation with live demo (Session 13)
+- ❌ 4-6 page IEEE format report
+
+#### 3. AI Course (COMP6065001)
+- ❌ Presentation emphasizing AI techniques (Week 13)
+
+#### 4. Distributed Systems (COMP6705001)
+- ❌ Presentation emphasizing distributed principles (Week 13)
+
+### Core Improvements Needed
+- ❌ Proper training (10+ epochs pretrain, 20+ epochs finetune)
+- ❌ Validation during training
+- ❌ Baseline comparisons (random, majority, BLOSUM62)
+- ❌ Evaluation metrics (ROC-AUC, PR-AUC, Spearman correlation)
+- ❌ Reproducibility (fixed seeds, metadata logging)
+
+## Step-by-Step Execution Plan
+
+### Step 1: Fix Reproducibility (CURRENT)
+- Add fixed random seeds to all modules
+- Add metadata logging for training runs
+- YOU NEED TO: Nothing, I'll implement this
+
+### Step 2: Implement Proper Training with Validation
+- Implement proper MLM pretraining (10+ epochs)
+- Implement proper fine-tuning (20+ epochs)
+- Add validation during training
+- Save best checkpoints
+- YOU NEED TO: Nothing, I'll implement this
+
+### Step 3: Add Evaluation Metrics
+- Implement ROC-AUC for binding site prediction
+- Implement PR-AUC for imbalanced classification
+- Implement Spearman correlation for variant scoring
+- YOU NEED TO: Nothing, I'll implement this
+
+### Step 4: Implement Baseline Comparisons
+- Random baseline
+- Majority class baseline
+- BLOSUM62 substitution score baseline
+- YOU NEED TO: Nothing, I'll implement this
+
+### Step 5: Course Deliverables
+- Literature review and research paper
+- Presentations for all 4 courses
+- YOU NEED TO: Provide feedback on presentations, review papers
