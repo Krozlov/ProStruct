@@ -110,54 +110,55 @@ Python, PyTorch (CPU), Redis, FastAPI, SQLite, vanilla JS/Chart.js frontend.
 #### 1. Research Methodology (COMP6705001)
 - ❌ Literature review on protein structure prediction & distributed ML
 - ❌ 25-page LaTeX research paper (IEEE two-column format)
-- ❌ Statistical analysis with baseline comparisons
+- ✅ Statistical analysis with baseline comparisons
 
 #### 2. Computational Biology (COMP6705001)
-- ❌ Proposal slides (Session 7)
-- ❌ Milestone slides (Session 10)
-- ❌ Final presentation with live demo (Session 13)
-- ❌ 4-6 page IEEE format report
+- ✅ Proposal slides (Session 7) - `presentations/compbio_proposal.md`
+- ✅ Milestone slides (Session 10) - `presentations/compbio_milestone.md`
+- ✅ Final presentation with live demo (Session 13) - `presentations/compbio_final.md`
+- ✅ 4-6 page IEEE format report - `reports/compbio_report.md`
 
 #### 3. AI Course (COMP6065001)
-- ❌ Presentation emphasizing AI techniques (Week 13)
+- ✅ Presentation emphasizing AI techniques (Week 13) - `presentations/ai_course.md`
 
 #### 4. Distributed Systems (COMP6705001)
-- ❌ Presentation emphasizing distributed principles (Week 13)
+- ✅ Presentation emphasizing distributed principles (Week 13) - `presentations/distributed_systems.md`
 
 ### Core Improvements Needed
-- ❌ Proper training (10+ epochs pretrain, 20+ epochs finetune)
-- ❌ Validation during training
-- ❌ Baseline comparisons (random, majority, BLOSUM62)
-- ❌ Evaluation metrics (ROC-AUC, PR-AUC, Spearman correlation)
-- ❌ Reproducibility (fixed seeds, metadata logging)
+- ✅ Proper training (10+ epochs pretrain, 20+ epochs finetune)
+- ✅ Validation during training
+- ✅ Baseline comparisons (random, majority, BLOSUM62)
+- ✅ Evaluation metrics (ROC-AUC, PR-AUC, Spearman correlation)
+- ✅ Reproducibility (fixed seeds, metadata logging)
 
 ## Step-by-Step Execution Plan
 
-### Step 1: Fix Reproducibility (CURRENT)
-- Add fixed random seeds to all modules
-- Add metadata logging for training runs
-- YOU NEED TO: Nothing, I'll implement this
+### Step 1: Fix Reproducibility ✅ COMPLETED
+- ✅ Add fixed random seeds to all modules
+- ✅ Add metadata logging for training runs
 
-### Step 2: Implement Proper Training with Validation
-- Implement proper MLM pretraining (10+ epochs)
-- Implement proper fine-tuning (20+ epochs)
-- Add validation during training
-- Save best checkpoints
-- YOU NEED TO: Nothing, I'll implement this
+### Step 2: Implement Proper Training with Validation ✅ COMPLETED
+- ✅ Implement proper MLM pretraining (10+ epochs)
+- ✅ Implement proper fine-tuning (20+ epochs)
+- ✅ Add validation during training
+- ✅ Save best checkpoints
 
-### Step 3: Add Evaluation Metrics
-- Implement ROC-AUC for binding site prediction
-- Implement PR-AUC for imbalanced classification
-- Implement Spearman correlation for variant scoring
-- YOU NEED TO: Nothing, I'll implement this
+### Step 3: Add Evaluation Metrics ✅ COMPLETED
+- ✅ Implement ROC-AUC for binding site prediction
+- ✅ Implement PR-AUC for imbalanced classification
+- ✅ Implement Spearman correlation for variant scoring
 
-### Step 4: Implement Baseline Comparisons
-- Random baseline
-- Majority class baseline
-- BLOSUM62 substitution score baseline
-- YOU NEED TO: Nothing, I'll implement this
+### Step 4: Implement Baseline Comparisons ✅ COMPLETED
+- ✅ Random baseline
+- ✅ Majority class baseline
+- ✅ BLOSUM62 substitution score baseline
 
-### Step 5: Course Deliverables
-- Literature review and research paper
-- Presentations for all 4 courses
-- YOU NEED TO: Provide feedback on presentations, review papers
+### Step 5: Course Deliverables ✅ COMPLETED (except Research Methodology)
+- ✅ Computational Biology Proposal slides (Session 7)
+- ✅ Computational Biology Milestone slides (Session 10)
+- ✅ Computational Biology Final presentation (Session 13)
+- ✅ Computational Biology 4-6 page report
+- ✅ AI Course presentation
+- ✅ Distributed Systems presentation
+- ❌ Literature review for research paper (PENDING)
+- ❌ 25-page LaTeX research paper (PENDING)
