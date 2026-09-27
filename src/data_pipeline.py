@@ -9,7 +9,7 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Tuple
 from Bio import SeqIO
-from Bio.SwissProt import Feature
+from Bio.SeqFeature import SeqFeature
 import yaml
 
 
@@ -31,7 +31,7 @@ def load_config(config_path: str = 'config.yaml') -> Dict:
         return yaml.safe_load(f)
 
 
-def parse_swissprot_features(features: List[Feature]) -> Dict[int, str]:
+def parse_swissprot_features(features: List[SeqFeature]) -> Dict[int, str]:
     """
     Parse SwissProt features to extract binding/active site annotations.
     Returns a dict mapping residue positions to annotation types.
